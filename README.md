@@ -10,6 +10,44 @@ Desktop EEG and regulation workspace built with Tauri 2, React, TypeScript, Rust
 - Music page with a compact player, layered prompt builder, generated WAV history, progress display, and file deletion.
 - Local Stable Audio 3 Small Music generation through `music-service`.
 
+## User Guide / 用户操作指南
+
+正式的 Session A/B 脑电情绪范式位于应用的 `EEG Acquisition` 页面。完整的采集规范、自评规则、异常处理和数据字段说明见：
+
+- [脑电驱动音乐生成与后续调控范式执行操作指南](docs/eeg-emotion-paradigm-operation-guide.zh.md)
+
+### Study video library / 范式视频库
+
+点击界面中的 `Study Videos` 时，应选择包含以下四个子目录的共同根目录，而不是某一个情绪目录：
+
+```text
+study-videos/
+├── Depression/   # at least 5 MP4 files
+├── Anxiety/      # at least 5 MP4 files
+├── Calm/         # at least 5 MP4 files
+└── Happy/        # at least 5 MP4 files
+```
+
+- 四个目录名称必须完全一致；为兼容 Windows、macOS 和 Linux，请保持上述大小写。
+- 每类至少 5 个直接放在对应目录下的 `.mp4` 文件，总计至少 20 个；嵌套目录不会被扫描。
+- 不需要额外的 JSON 索引。文件名会用于生成稳定的 `video_id`，正式采集后不要重命名。
+- 当前 UI 每个 trial 固定播放视频 45 秒，因此视频应至少持续 45 秒，并提前检查可播放性和音量一致性。
+- 每类多于 5 个视频时，系统会根据 `Session run ID` 确定性选择 5 个并生成可复现的 20-trial 队列。
+
+### Session A/B quick start / 快速操作
+
+1. 登录后进入 `EEG Acquisition`，点击 `Start Device`。
+2. 等待界面同时显示 EEG `streaming` 和 Trigger `connected`。
+3. 首次个人校准选择 `Session A · Calibration`；独立评估选择 `Session B · Held-out`。
+4. 填写稳定的 `Subject ID` 和本次唯一的 `Session run ID`。
+5. 点击 `Study Videos` 并选择符合上述结构的视频根目录。
+6. 点击 `Start 20-Trial Session`。范式会自行启动连续录制，不要提前点击普通的 `Start Record`。
+7. 每个 trial 点击 `Begin Trial`，系统自动执行 5 秒基线、2 秒提示、45 秒视频和 5 秒视频后静息。
+8. 完成 1-9 分的 valence/arousal 自评、质量检查和伪迹标记，然后点击 `Finalize Trial`。
+9. 第 20 个 trial 完成后录制自动停止。需要提前退出时使用 `End Session`，不要直接刷新或关闭窗口。
+
+视频库校验通过并不代表可以开始正式采集；`Start 20-Trial Session` 还要求真实 EEG 数据流和 trigger 均已连接。
+
 ## Requirements
 
 - Node.js and pnpm.
