@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import ProtectedRoute from './auth/ProtectedRoute';
 import { EegProvider } from './eeg/EegSessionContext';
+import { EegStudySessionProvider } from './eeg/EegStudySessionContext';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import NotFound from './pages/NotFound';
@@ -30,7 +31,9 @@ function AppRoutes() {
         <Route
           element={(
             <EegProvider>
-              <Home />
+              <EegStudySessionProvider>
+                <Home />
+              </EegStudySessionProvider>
             </EegProvider>
           )}
         >

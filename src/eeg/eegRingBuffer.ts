@@ -44,7 +44,13 @@ export class EegRingBuffer {
       });
     }
 
-    if (payload.triggerClass === 1 || payload.triggerClass === 2 || payload.triggerClass === 255) {
+    if (
+      payload.triggerClass === 1
+      || payload.triggerClass === 2
+      || payload.triggerClass === 3
+      || payload.triggerClass === 4
+      || payload.triggerClass === 255
+    ) {
       this.markers.push({
         timeSeconds: payload.startedAtMs / 1000,
         classId: payload.triggerClass,

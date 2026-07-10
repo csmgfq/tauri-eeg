@@ -38,6 +38,7 @@ export function useRealtimeEeg() {
   }, [eegSession]);
 
   return useMemo(() => ({
+    activeStudySession: eegSession.activeStudySession,
     canPauseRecord: eegSession.canPauseRecord,
     canResumeRecord: eegSession.canResumeRecord,
     canStartDevice: eegSession.canStartDevice,
@@ -61,5 +62,6 @@ export function useRealtimeEeg() {
     stopDevice: eegSession.stopDevice,
     stopRecord: eegSession.stopRecord,
     toggleChannel: eegSession.toggleChannel,
+    triggerConnected: eegSession.triggerConnected,
   }), [eegSession, reset, snapshot]);
 }

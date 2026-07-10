@@ -17,6 +17,7 @@ type Props = {
   canStopDevice: boolean;
   canStopRecord: boolean;
   deviceStatus: EegDeviceStatus;
+  studySessionActive: boolean;
   timeWindowSeconds: number;
   onAmplitudeChange: (value: number) => void;
   onPauseRecord: () => void;
@@ -38,6 +39,7 @@ export default function EegControls({
   canStopDevice,
   canStopRecord,
   deviceStatus,
+  studySessionActive,
   timeWindowSeconds,
   onAmplitudeChange,
   onPauseRecord,
@@ -66,7 +68,7 @@ export default function EegControls({
         variant="outlined"
         data-agent-action="stop_eeg_device"
         startIcon={<PowerSettingsNewRoundedIcon />}
-        disabled={!canStopDevice}
+        disabled={studySessionActive || !canStopDevice}
         onClick={onStopDevice}
       >
         Stop Device
@@ -76,7 +78,7 @@ export default function EegControls({
         variant="contained"
         data-agent-action="start_eeg_recording"
         startIcon={<PlayArrowRoundedIcon />}
-        disabled={!canStartRecord}
+        disabled={studySessionActive || !canStartRecord}
         onClick={onStartRecord}
       >
         Start Record
@@ -86,7 +88,7 @@ export default function EegControls({
         variant="outlined"
         data-agent-action={canResumeRecord ? 'resume_eeg_recording' : 'pause_eeg_recording'}
         startIcon={canResumeRecord ? <PlayArrowRoundedIcon /> : <PauseRoundedIcon />}
-        disabled={!canPauseRecord && !canResumeRecord}
+        disabled={studySessionActive || (!canPauseRecord && !canResumeRecord)}
         onClick={canResumeRecord ? onResumeRecord : onPauseRecord}
       >
         {canResumeRecord ? 'Resume Record' : 'Pause Record'}
@@ -96,7 +98,7 @@ export default function EegControls({
         variant="outlined"
         data-agent-action="stop_and_save_eeg_recording"
         startIcon={<StopRoundedIcon />}
-        disabled={!canStopRecord}
+        disabled={studySessionActive || !canStopRecord}
         onClick={onStopRecord}
       >
         Stop Record

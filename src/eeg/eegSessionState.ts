@@ -17,6 +17,7 @@ export type EegSessionAction =
   | { type: 'stop_device_failed'; message: string }
   | { type: 'start_record' }
   | { type: 'start_record_failed'; message: string }
+  | { type: 'record_command_failed'; message: string }
   | { type: 'pause_record' }
   | { type: 'resume_record' }
   | { type: 'stop_record' }
@@ -98,6 +99,9 @@ export function eegSessionReducer(
       return { ...state, recordStatus: 'recording', errorMessage: null };
 
     case 'start_record_failed':
+      return { ...state, errorMessage: action.message };
+
+    case 'record_command_failed':
       return { ...state, errorMessage: action.message };
 
     case 'pause_record':

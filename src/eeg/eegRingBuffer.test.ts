@@ -65,4 +65,17 @@ describe('EegRingBuffer', () => {
 
     expect(snapshot.markers).toEqual([{ timeSeconds: 2, classId: 2 }]);
   });
+
+  it('keeps all four formal paradigm trigger classes', () => {
+    const buffer = new EegRingBuffer(DEFAULT_EEG_CHANNELS.slice(0, 1), 2);
+
+    buffer.appendPayload(makePayload(1, 0, [[1]], 1));
+    buffer.appendPayload(makePayload(2, 500, [[2]], 2));
+    buffer.appendPayload(makePayload(3, 1000, [[3]], 3));
+    buffer.appendPayload(makePayload(4, 1500, [[4]], 4));
+
+    const snapshot = buffer.toDisplayData(new Set(['ch01']), 5);
+
+    expect(snapshot.markers.map((marker) => marker.classId)).toEqual([1, 2, 3, 4]);
+  });
 });

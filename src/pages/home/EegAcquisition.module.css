@@ -126,6 +126,23 @@
   min-height: 0;
 }
 
+.studyActiveWorkspace {
+  overflow-y: auto;
+}
+
+.studyActiveWorkspace .channelPanel {
+  display: none;
+}
+
+.studyActiveWorkspace .monitorGrid {
+  flex: 0 0 auto;
+  min-height: 260px;
+}
+
+.studyActiveWorkspace .waveformPanel {
+  height: 260px;
+}
+
 .waveformPanel {
   background: #202722;
   border: 1px solid rgba(44, 34, 24, 0.16);

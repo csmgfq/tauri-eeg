@@ -1,10 +1,24 @@
 use serde::{Deserialize, Serialize};
 
+use super::trial::EegStudySessionInput;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartEegRecordingInput {
     pub user_id: String,
     pub username: String,
+    #[serde(default)]
+    pub study_session: Option<EegStudySessionInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EegRecordingDeviceMetadata {
+    pub bind_host: String,
+    pub tcp_port: u16,
+    pub eeg_device_ip: String,
+    pub trigger_device_ip: String,
+    pub block_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -1,5 +1,24 @@
 # Neuro Music Runtime Requirements
 
+## Research Scope Boundary
+
+- Current paper: `personal_calibration` -> `held_out_generation`, with feedback disabled in both sessions.
+- Current output: music conditioned to match the decoded EEG affective state.
+- Future study: `regulation_feedback`, where generated music is allowed to influence later EEG and the intervention effect is evaluated.
+- Runtime endpoint names may still use `control`; that does not make the current study a closed-loop regulation experiment.
+
+The current recorder uses one continuous raw recording per Session A/B and
+separate Rust-authored trial boundaries:
+
+```text
+begin_eeg_trial -> phase events -> end_eeg_trial -> finalize_eeg_trial
+```
+
+`end_eeg_trial` freezes `eeg_start_sample/eeg_end_sample` before the participant
+fills in self-report. `finalize_eeg_trial` appends the outcome to `trials.jsonl`.
+Hardware trigger sample indices, session/device metadata, and interrupted trials
+remain auditable in the same session directory.
+
 ## Modes
 
 ### Mode 1: `mock`
@@ -266,13 +285,13 @@ required model asset for the first integrated system module. Keep it as an
 ablation script, and prioritize supervised personal calibration plus
 validation-based route selection.
 
-Minimum calibration paradigm:
+Minimum calibration and generation paradigm:
 
-- Session 1 records labeled video-induced EEG and self-report feedback.
+- Session A `personal_calibration` records labeled video-induced EEG and self-report, with music/video feedback disabled.
 - Train a personal baseline model from the recorded 32-channel windows.
-- Session 2 runs live regulation and validates whether music/video feedback
-  changes the user's EEG emotion state.
-- Use the four formal regulation classes from
+- Session B `held_out_generation` evaluates next-session recognition and EEG-conditioned music generation, with feedback disabled.
+- Future Session C `regulation_feedback` evaluates whether music/video feedback changes EEG and self-reported emotion; it is outside the current paper.
+- Use the four formal EEG-to-music classes from
   `config/eeg_emotion_paradigm.json`.
 - Each class needs at least five induction videos for the minimum runnable
   paradigm.
@@ -317,7 +336,16 @@ valence/arousal regression with rule mapping
 Riemannian tangent-space SVM/LDA baseline
 ```
 
-Music regulation policy:
+Current music-generation conditioning policy:
+
+```text
+sad / depression: match low valence and low-to-medium arousal
+fear / anxiety:   match low valence and high arousal
+neutral / calm:   match neutral-to-positive valence and low arousal
+happy:            match positive valence and medium arousal
+```
+
+Future closed-loop regulation policy:
 
 ```text
 sad / depression

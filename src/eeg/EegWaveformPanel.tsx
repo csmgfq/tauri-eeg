@@ -30,6 +30,8 @@ const TRACE_COLORS = [
 const TRIGGER_COLORS: Record<EegTriggerCode, string> = {
   1: '#2f9e74',
   2: '#d99b1f',
+  3: '#27a7a8',
+  4: '#b54a8f',
   255: '#7f8cff',
 };
 

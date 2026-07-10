@@ -1,6 +1,8 @@
 {
-  "version": "emotion-regulation-4class-v2",
-  "description": "SEED-style personal 32-channel EEG emotion calibration paradigm for realtime music and video regulation.",
+  "version": "eeg-music-generation-4class-v3",
+  "description": "SEED-style personal 32-channel EEG paradigm for current EEG-conditioned music generation and future closed-loop regulation research.",
+  "current_study_scope": "eeg_conditioned_music_generation_without_feedback",
+  "future_study_scope": "closed_loop_music_regulation",
   "design_principle": "Use discrete video-induced emotion targets first, then use self-report to accept, reject, or mark ambiguous trials. Do not create training labels by hard-cutting all trials on DEAP-style valence/arousal thresholds.",
   "minimum_videos_per_class": 5,
   "trials_per_class_per_session": 5,
@@ -24,18 +26,47 @@
     "post_video_rest": 5,
     "self_report_timeout": 30
   },
+  "trial_phase_order": [
+    "baseline_rest",
+    "pre_video_hint",
+    "video",
+    "post_video_rest",
+    "self_report",
+    "quality_check"
+  ],
+  "recording_contract": {
+    "raw_recording_scope": "one continuous recording per Session A or Session B",
+    "trial_boundary_source": "Rust-side sample indices and UTC timestamps",
+    "session_files": [
+      "eeg.f32le.bin",
+      "trigger.i32le.bin",
+      "metadata.json",
+      "trial-events.jsonl",
+      "trials.jsonl"
+    ],
+    "feedback_enabled_for_current_paper": false
+  },
   "sessions": [
     {
       "id": 1,
-      "name": "baseline_induction",
+      "name": "personal_calibration",
+      "stage": "current_paper",
       "feedback_enabled": false,
       "purpose": "Collect labeled personal EEG under controlled video induction."
     },
     {
       "id": 2,
+      "name": "held_out_generation",
+      "stage": "current_paper",
+      "feedback_enabled": false,
+      "purpose": "Evaluate held-out-session EEG recognition and EEG-conditioned music generation without feedback."
+    },
+    {
+      "id": 3,
       "name": "regulation_feedback",
+      "stage": "future_closed_loop",
       "feedback_enabled": true,
-      "purpose": "Validate online emotion recognition and music/video regulation effects."
+      "purpose": "Future study only: validate whether music or video feedback changes EEG and self-reported emotion."
     }
   ],
   "classes": [
@@ -52,6 +83,7 @@
         "arousal_max": 5
       },
       "uncertain_if": "valence is 5 or arousal is 6; keep for audit but exclude from first classifier.",
+      "generation_goal": "match_low_valence_low_to_medium_arousal",
       "regulation_goal": "raise_valence_gently_raise_arousal"
     },
     {
@@ -67,6 +99,7 @@
         "arousal_min": 6
       },
       "uncertain_if": "valence is 5 or arousal is 5; keep for audit but exclude from first classifier.",
+      "generation_goal": "match_low_valence_high_arousal",
       "regulation_goal": "lower_arousal_stabilize_valence"
     },
     {
@@ -82,6 +115,7 @@
         "arousal_max": 4
       },
       "uncertain_if": "valence is below 5 or arousal is 5; keep for audit but exclude from first classifier.",
+      "generation_goal": "match_neutral_to_positive_valence_low_arousal",
       "regulation_goal": "maintain_low_arousal_stability"
     },
     {
@@ -98,6 +132,7 @@
         "arousal_max": 8
       },
       "uncertain_if": "valence is 5 or arousal is above 8; keep for audit but exclude from first classifier.",
+      "generation_goal": "match_positive_valence_medium_arousal",
       "regulation_goal": "maintain_positive_valence_without_overstimulation"
     }
   ],
@@ -110,6 +145,7 @@
       "riemannian_tangent_space_svm_or_lda"
     ],
     "selection_metric": "validation balanced accuracy with per-class confusion review",
-    "minimum_live_gate": "Use live regulation only when validation confidence is acceptable; otherwise fall back to mock/label-driven mode."
+    "minimum_generation_gate": "Use automatic EEG-conditioned music generation only when held-out-session validation confidence is acceptable; otherwise fall back to oracle-label or mock mode.",
+    "minimum_regulation_gate": "Future closed-loop regulation requires the generation study, end-to-end logging, and ethics gate to be complete first."
   }
 }

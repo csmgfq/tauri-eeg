@@ -1,4 +1,40 @@
-# Realtime EEG Emotion Music Integration Plan
+# Realtime EEG-Conditioned Music Integration Plan
+
+## Research Scope Boundary (2026-07-10)
+
+The current paper covers a one-way pipeline:
+
+```text
+personal EEG calibration -> held-out EEG inference -> music conditioning
+-> realtime generation -> emotion consistency, quality, latency, and stability evaluation
+```
+
+Both current-paper sessions run with music/video feedback disabled. Closed-loop
+regulation, intervention efficacy, and causal music-to-EEG analysis are deferred
+to a future `regulation_feedback` session. Existing `regulation` names in the UI
+or API are product/runtime names and must not be treated as evidence that the
+current study has validated emotion regulation.
+
+The implemented current-paper recorder keeps one continuous raw recording for a
+Session A/B run and uses a three-step Rust-side trial lifecycle:
+
+```text
+begin trial -> end EEG boundary -> finalize self-report
+```
+
+The acquisition UI now orchestrates that lifecycle before any regulation page.
+It validates a four-folder study video root, creates a deterministic balanced
+20-trial queue from `sessionRunId`, enforces the minimum 5/2/45/5 second phase
+timings, hides the induction target until quality review, and opens self-report
+only after Rust confirms the EEG end boundary. Missing triggers or playback/data
+failures force an auditable `artifact_rejected` outcome. While a study session is
+active, generic pause/stop controls, regulation navigation, storage changes, and
+sign-out are locked; `End Session` preserves an interrupted-trial record.
+
+This writes `trial-events.jsonl` and `trials.jsonl` alongside the existing EEG,
+trigger, and session metadata files. Sample boundaries are captured before
+self-report, future feedback sessions are rejected, and interrupted trials stay
+auditable.
 
 ## Current System Baseline
 
@@ -398,20 +434,25 @@ Chinese execution guide:
 For real personal EEG collected from the 32-channel cap, the system should run
 an emotion calibration paradigm before claiming reliable live emotion
 recognition. The old `emotionBCI/emo_bci` design is a useful starting point,
-but the production regulation system should use a smaller four-class paradigm
-that matches the actual intervention targets:
+but the current EEG-to-music system should use a smaller four-class paradigm
+that supports personal calibration and state-consistent music generation:
 
 ```text
-Session 1 - Baseline / labeled induction
+Session A - Personal calibration
   -> 20 video trials across 4 emotions
   -> collect raw 32ch EEG with trigger start/end timestamps
   -> collect subject self-report after each trial
   -> train or adapt a personal emotion classifier
 
-Session 2 - Regulation / feedback validation
+Session B - Held-out EEG-conditioned generation
   -> run the same 32ch EEG stream through the calibrated classifier
-  -> feed latest emotion label to music control and video recommendation
-  -> collect feedback and compare with Session 1 baseline
+  -> condition music to match the decoded EEG affective state
+  -> keep music/video feedback disabled for the current paper
+  -> evaluate recognition, generated audio, latency, and stability
+
+Future Session C - Regulation / feedback validation
+  -> close the music-to-EEG loop only after the current paper is complete
+  -> compare closed-loop, matched open-loop, and random control
 ```
 
 The paradigm should be SEED-style, not DEAP-style. DEAP is useful for offline
@@ -672,7 +713,7 @@ Riemannian tangent-space SVM/LDA baseline
 
 Select by validation balanced accuracy and confusion review. If validation is
 weak or one class collapses, keep the live system in label-driven/mock mode and
-collect more calibration trials before enabling automatic regulation.
+collect more calibration trials before enabling automatic EEG-conditioned generation.
 
 Deep EmotionCLIP or native 32-channel models should be added after this
 calibration loop proves that the local cap, triggers, and labels are aligned.

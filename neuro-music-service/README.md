@@ -1,11 +1,46 @@
 # Neuro Music Service
 
-FastAPI service boundary for realtime EEG emotion music regulation.
+FastAPI service boundary for realtime EEG-conditioned music generation and future closed-loop regulation.
 
 This service is intentionally separate from `music-service`, which generates
 offline WAV files with Stable Audio 3 Small Music. `neuro-music-service`
 controls a realtime DEMON session and exposes a small contract that the Tauri
 app can call without importing model code into Rust or React.
+
+## Research Scope
+
+- Current paper: personalized EEG emotion inference -> music conditioning -> realtime generation and output evaluation.
+- Current paper sessions `personal_calibration` and `held_out_generation` both run with feedback disabled.
+- Future study: `regulation_feedback` closes the music-to-EEG loop and evaluates intervention effects.
+- Existing `control` and `regulation` names in the product API are runtime names; they do not imply that the current paper has validated emotion regulation.
+
+## Current Study Recorder Contract
+
+The Tauri EEG backend records one continuous raw file pair for each Session A
+or Session B. Trial boundaries and outcomes are stored separately so the
+self-report period is not included in each trial's EEG range:
+
+```text
+start_eeg_recording(studySession)
+-> begin_eeg_trial
+-> mark_eeg_trial_phase: pre_video_hint -> video -> post_video_rest
+-> end_eeg_trial       # freezes Rust-side EEG sample boundary
+-> finalize_eeg_trial  # adds self-report and quality outcome
+```
+
+Each study-session directory contains:
+
+```text
+eeg.f32le.bin
+trigger.i32le.bin
+metadata.json
+trial-events.jsonl
+trials.jsonl
+```
+
+Only `current_paper` sessions with `feedbackEnabled=false` are accepted by the
+recorder. Future `regulation_feedback` trials are rejected until the closed-loop
+stage is explicitly enabled.
 
 ## Minimal Contract
 
@@ -117,7 +152,7 @@ high valence + low arousal -> calm       -> neutral
 high valence + high arousal -> happy     -> happy
 ```
 
-This validates the valence/arousal-to-regulation strategy. It is still an
+This validates the valence/arousal-to-music-conditioning contract. It is still an
 oracle-label replay, not a trained DEAP EEG classifier.
 
 Build a full 32-subject manifest for later model training:
@@ -350,7 +385,7 @@ subject 22: valence 0.8333, arousal 0.5667, direct four-class 0.3750
 subject 24: valence 0.5333, arousal 0.7500, direct four-class 0.5625
 ```
 
-Interpretation: the four regulation classes are not impossible for a single
+Interpretation: the four EEG-to-music classes are not impossible for a single
 subject. The main degradation comes from cross-subject/domain shift and the
 small number of held-out trials per subject. Different subjects prefer
 different heads, so the live system should train both direct four-class and
@@ -389,7 +424,7 @@ The contrastive loss decreased, but downstream four-class accuracy did not
 improve. Do not extend this self-pretraining variant as the next default
 experiment. The current practical route is still supervised personal
 calibration: train direct four-class and valence/arousal binary candidates,
-then select the best validation route for each user before live regulation.
+then select the best validation route for each user before automatic EEG-conditioned generation.
 
 ## Why This Is Separate From `music-service`
 

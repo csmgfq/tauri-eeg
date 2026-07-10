@@ -19,6 +19,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ExperimentAgentPanel from '../agent/ExperimentAgentPanel';
 import { useExperimentAgent } from '../agent/useExperimentAgent';
 import { useAuth } from '../auth/AuthContext';
+import { useEegStudySession } from '../eeg/EegStudySessionContext';
 import MatterScene from '../components/MatterScene';
 import HomeIntroLogo from '../homeIntro/HomeIntroLogo';
 import { homeIntroPlayback } from '../homeIntro/homeIntroPlayback';
@@ -69,6 +70,7 @@ export default function Home() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser, signOut } = useAuth();
+  const study = useEegStudySession();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isStorageOpen, setIsStorageOpen] = useState(false);
   const [storageLocation, setStorageLocation] = useState<StorageLocation | null>(null);
@@ -91,6 +93,12 @@ export default function Home() {
   useEffect(() => {
     void preloadMusicServiceForUser({ userId: currentUser?.id });
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (study.navigationLocked && location.pathname !== '/eeg-acquisition') {
+      navigate('/eeg-acquisition', { replace: true });
+    }
+  }, [location.pathname, navigate, study.navigationLocked]);
 
   useEffect(() => {
     if (homeIntroPlayback.shouldPlay(currentUser?.id)) {
@@ -120,6 +128,9 @@ export default function Home() {
   }, []);
 
   const requestNavigation = (path: string) => {
+    if (study.navigationLocked && path !== '/eeg-acquisition') {
+      return;
+    }
     if (path === location.pathname) {
       return;
     }
@@ -165,6 +176,9 @@ export default function Home() {
   };
 
   const handleSignOut = () => {
+    if (study.navigationLocked) {
+      return;
+    }
     signOut();
     navigate('/login', { replace: true });
   };
@@ -293,6 +307,7 @@ export default function Home() {
                   key={item.label}
                   className={`${styles.navItem} ${isActive ? styles.isActive : ''}`}
                   onClick={() => handleNavClick(item)}
+                  disabled={study.navigationLocked && item.path !== '/eeg-acquisition'}
                   selected={isActive}
                   style={{ '--item-index': index } as CSSProperties}
                   aria-current={isActive ? 'page' : undefined}
@@ -320,6 +335,7 @@ export default function Home() {
               aria-expanded={isStorageOpen}
               size="small"
               onClick={() => setIsStorageOpen((isOpen) => !isOpen)}
+              disabled={study.navigationLocked}
             >
               <FolderRoundedIcon fontSize="small" />
             </IconButton>
@@ -328,6 +344,7 @@ export default function Home() {
               aria-label="Sign out"
               size="small"
               onClick={handleSignOut}
+              disabled={study.navigationLocked}
             >
               <LogoutRoundedIcon fontSize="small" />
             </IconButton>
@@ -384,15 +401,18 @@ export default function Home() {
         >
           <Outlet />
 
-          <button
-            type="button"
-            className={styles.nextPageButton}
-            aria-label={`Go to ${nextItem.label}`}
-            onClick={handleNextClick}
-          >
-            <span>{nextLabel}</span>
-            <NorthEastRoundedIcon className={styles.nextPageIcon} fontSize="small" aria-hidden="true" />
-          </button>
+          {!isEegWorkspaceRoute ? (
+            <button
+              type="button"
+              className={styles.nextPageButton}
+              aria-label={`Go to ${nextItem.label}`}
+              onClick={handleNextClick}
+              disabled={study.navigationLocked}
+            >
+              <span>{nextLabel}</span>
+              <NorthEastRoundedIcon className={styles.nextPageIcon} fontSize="small" aria-hidden="true" />
+            </button>
+          ) : null}
         </section>
 
         <GlobalMentalScalePanel>

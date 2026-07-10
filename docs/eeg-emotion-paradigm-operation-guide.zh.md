@@ -1,6 +1,6 @@
-# 情绪脑电音乐调控范式执行操作指南
+# 脑电驱动音乐生成与后续调控范式执行操作指南
 
-本文档是 32 通道脑电情绪校准范式的执行手册，面向实际采集人员和系统集成人员。目标是采集可用于个人情绪识别、实时音乐生成调控和视频推荐的高质量校准数据。
+本文档是 32 通道脑电情绪校准范式的执行手册，面向实际采集人员和系统集成人员。当前研究目标是采集可用于个人情绪识别和 EEG-conditioned 音乐生成的高质量数据；音乐对 EEG/主观情绪的闭环调控属于后续研究，不进入当前论文的完成标准。
 
 ## 1. 核心原则
 
@@ -13,6 +13,8 @@
 - 用自评确认样本是否进入训练集。
 - 模糊样本保留但不进入第一版监督分类器。
 - 每个用户单独校准，不默认跨用户泛化。
+- 当前论文的校准和 held-out generation session 均关闭音乐/视频反馈。
+- 当前论文评价“生成音乐是否匹配 EEG 状态”，不评价“音乐是否改善或改变 EEG 状态”。
 
 不要把所有 trial 按 `valence=5`、`arousal=5` 强行切成四类。DEAP 实验显示这会引入大量边界噪声。
 
@@ -144,23 +146,70 @@ artifact_rejected
 
 ## 7. Session 安排
 
-Session 1：基线诱发和个人校准。
+Session A：个人校准 `personal_calibration`。
 
 ```text
 目标：采集带自评确认的个人 EEG 标签数据。
-反馈：关闭音乐/视频调控反馈。
+反馈：关闭音乐/视频反馈。
 输出：可训练的个人校准数据集。
 ```
 
-Session 2：调控反馈验证。
+Session B：独立生成评价 `held_out_generation`。
 
 ```text
-目标：验证模型在线识别和音乐/视频调控是否有效。
-反馈：开启实时音乐调控，可接视频推荐。
-输出：调控前后状态变化和系统延迟记录。
+目标：在独立 session 上验证个人模型，并评价 EEG-conditioned 音乐的情绪一致性、质量、实时性和稳定性。
+反馈：关闭音乐/视频反馈；生成音频不作为下一 EEG 窗口的调控目标。
+输出：held-out EEG 指标、生成音频、控制轨迹和系统性能记录。
 ```
 
-Session 1 和 Session 2 不要混为同一个评估集。Session 2 更接近真实使用，应作为泛化和调控效果验证。
+Future Session C：闭环调控 `regulation_feedback`。
+
+```text
+目标：在当前 EEG-to-music 论文完成后，验证音乐/视频反馈是否改变 EEG 和主观情绪。
+反馈：开启实时音乐调控，可接视频推荐。
+输出：闭环、匹配开环、随机条件的状态变化和因果分析。
+```
+
+Session A 和 Session B 不要混为同一个训练/评估集。Future Session C 不得提前并入当前论文数据。
+
+### 7.1 系统录制生命周期
+
+每个 Session A/B 使用一段连续原始 EEG recording；20 个 trial 通过 Rust 侧样本索引切分：
+
+```text
+start_eeg_recording(studySession)
+-> begin_eeg_trial
+-> mark: pre_video_hint
+-> mark: video
+-> mark: post_video_rest
+-> end_eeg_trial
+-> participant self-report
+-> finalize_eeg_trial
+```
+
+- `begin_eeg_trial` 记录 EEG 起始 sample index 和 Rust UTC。
+- `end_eeg_trial` 必须在 post-video rest 结束后立即调用，冻结 EEG 终点。
+- `finalize_eeg_trial` 只补自评和质量标签，不延长该 trial 的 EEG 范围。
+- trigger 类别和 255 结束标记从原始 trigger 流关联到具体 sample index。
+- 若 trigger 缺失，trial 只能标为 `artifact_rejected`，不能进入训练。
+- 未完成便停止 recording 的 trial 自动写为 `interrupted`，保留审计记录。
+
+Session 目录必须包含 `eeg.f32le.bin`、`trigger.i32le.bin`、`metadata.json`、`trial-events.jsonl` 和 `trials.jsonl`。
+
+### 7.2 正式 UI 操作流程
+
+正式范式位于应用的 `EEG Acquisition` 页面，先于 Video/Game/Music Regulation：
+
+1. 启动 EEG device，确认 EEG 和 trigger 均显示 connected。
+2. 选择 Session A `personal_calibration` 或 Session B `held_out_generation`。
+3. 填写稳定的 `subject_id` 和本次唯一的 `session_run_id`。
+4. 选择包含 `Depression/Anxiety/Calm/Happy` 四个子目录的视频根目录；每类至少需要 5 个 MP4。
+5. 启动 session。系统按 `session_run_id` 确定性选择并打乱每类 5 个、总计 20 个 trial，同一 run id 可复现相同队列。
+6. 每个 trial 依次执行 baseline、hint、video 和 post-rest；`end_eeg_trial` 成功后才显示自评。
+7. 自评后进入质量检查。缺 trigger、视频播放失败、EEG gap、通道掉线或明显体动时必须标为 `artifact_rejected` 并保留具体 flag。
+8. 第 20 个 trial finalize 后自动停止连续 recording；提前结束 session 时，活动 trial 以 `interrupted` 落盘。
+
+Session 运行期间，普通 Pause、Stop Device、调控页导航、存储设置和退出登录均被锁定。不要用浏览器刷新或关闭窗口代替 `End Session`。
 
 ## 8. 必须保存的数据字段
 
@@ -288,7 +337,7 @@ per-class confusion matrix
 跨 session 稳定性
 ```
 
-如果 direct four-class 表现差，但 valence/arousal 二分类稳定，可以先上线维度模型，再映射到调控策略。
+如果 direct four-class 表现差，但 valence/arousal 二分类稳定，可以先上线维度模型，再映射到当前音乐生成条件。
 
 ## 13. 实时系统接入要求
 
@@ -314,38 +363,51 @@ confidence 低: 保持当前音乐状态或回到 neutral/calm 策略
 
 不要让单个 EEG 窗口直接触发大幅音乐变化。至少应对多个窗口做平滑。
 
-## 14. 音乐调控策略
+## 14. 当前音乐生成条件与未来调控策略
+
+### 14.1 当前论文：状态一致性音乐生成
+
+当前论文要求生成音乐与 EEG 解码出的情绪状态一致，不尝试把被试推向相反状态。
 
 检测为 `sad / depression`：
 
 ```text
-目标：提升 valence，轻微提升 arousal
-音乐：温暖、渐进、中等速度、正向和声
-避免：过慢、过暗、稀疏、反刍感强
+目标：匹配低 valence、低至中 arousal
+音乐条件：较暗音色、较慢至中速、低到中能量、连续结构
 ```
 
 检测为 `fear / anxiety`：
 
 ```text
-目标：先降低 arousal，再稳定 valence
-音乐：低到中速、软起音、节律稳定、低不协和
-避免：突然转场、高打击密度、尖锐高频、快速节奏
+目标：匹配低 valence、高 arousal
+音乐条件：紧张感、更高密度和能量、较强节奏或不协和度
 ```
 
 检测为 `neutral / calm`：
 
 ```text
-目标：维持低唤醒稳定状态
-音乐：环境、轻质感、低动态、低新奇度
-避免：强情绪推动
+目标：匹配中性至正 valence、低 arousal
+音乐条件：环境感、轻质感、低动态、低新奇度
 ```
 
 检测为 `happy`：
 
 ```text
-目标：保持正性，不推高到焦虑性高唤醒
-音乐：明亮、旋律连续、中等能量、平滑变化
-避免：过强刺激和过快节奏
+目标：匹配正 valence、中等 arousal
+音乐条件：明亮、旋律连续、中等能量、平滑变化
+```
+
+当前论文比较 true EEG、oracle label、shuffled EEG 和 static/no-EEG 条件，评价情绪一致性、音质、多样性和实时性。
+
+### 14.2 后续研究：反向情绪调控
+
+以下策略仅在 Future Session C 使用：
+
+```text
+sad / depression: 提升 valence，轻微提升 arousal
+fear / anxiety:   降低 arousal，稳定 valence
+neutral / calm:   维持低唤醒稳定状态
+happy:            保持正性，避免过度刺激
 ```
 
 ## 15. 采集完成后的交付物
@@ -361,7 +423,9 @@ accepted training manifest
 uncertain/rejected audit manifest
 model training report
 validation confusion matrix
-latency report if Session 2 was run
+generated audio and condition manifest if Session B was run
+latency report if Session B was run
+closed-loop effect report only if Future Session C was run
 ```
 
 这些文件应能回答三个问题：
@@ -372,4 +436,4 @@ latency report if Session 2 was run
 这段 EEG 是否应该进入训练？
 ```
 
-只有这三个问题都可追溯，后续情绪识别、音乐生成和视频推荐才有可靠基础。
+只有这三个问题都可追溯，当前 EEG 驱动音乐生成和后续闭环研究才有可靠基础。

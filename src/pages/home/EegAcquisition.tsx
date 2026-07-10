@@ -2,16 +2,19 @@ import ActivityRoundedIcon from '@mui/icons-material/GraphicEqRounded';
 import EegChannelList from '../../eeg/EegChannelList';
 import EegControls from '../../eeg/EegControls';
 import EegWaveformPanel from '../../eeg/EegWaveformPanel';
+import StudySessionPanel from '../../eeg/StudySessionPanel';
+import { useEegStudySession } from '../../eeg/EegStudySessionContext';
 import { useRealtimeEeg } from '../../eeg/useRealtimeEeg';
 import styles from './EegAcquisition.module.css';
 
 export default function EegAcquisition() {
   const eeg = useRealtimeEeg();
+  const study = useEegStudySession();
   const visibleCount = eeg.settings.visibleChannelIds.size;
   const deviceStatusLabel = eeg.deviceStatus === 'starting' ? 'waiting for EEG' : eeg.deviceStatus;
 
   return (
-    <section className={`${styles.workspace} mx-auto flex w-full min-h-0 flex-col`} aria-label="EEG acquisition workspace">
+    <section className={`${styles.workspace} ${study.navigationLocked ? styles.studyActiveWorkspace : ''} mx-auto flex w-full min-h-0 flex-col`} aria-label="EEG acquisition workspace">
       <header className={`${styles.header} flex items-start justify-between`}>
         <div>
           <div className={styles.eyebrow}>Acquisition Monitor</div>
@@ -30,6 +33,8 @@ export default function EegAcquisition() {
         </div>
       </header>
 
+      <StudySessionPanel />
+
       <EegControls
         amplitudeUvPerDiv={eeg.settings.amplitudeUvPerDiv}
         canPauseRecord={eeg.canPauseRecord}
@@ -39,6 +44,7 @@ export default function EegAcquisition() {
         canStopDevice={eeg.canStopDevice}
         canStopRecord={eeg.canStopRecord}
         deviceStatus={eeg.deviceStatus}
+        studySessionActive={study.navigationLocked}
         timeWindowSeconds={eeg.settings.timeWindowSeconds}
         onAmplitudeChange={eeg.setAmplitudeUvPerDiv}
         onPauseRecord={eeg.pauseRecord}

@@ -276,7 +276,9 @@ fn write_recording_sample(
 ) {
     if let Ok(mut runtime) = runtime.lock() {
         if let Some(writer) = runtime.recording.as_mut() {
-            let _ = writer.write_sample(samples_uv, trigger);
+            if let Err(error) = writer.write_sample(samples_uv, trigger) {
+                runtime.last_error = Some(error);
+            }
         }
     }
 }

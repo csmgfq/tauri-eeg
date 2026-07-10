@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  beginEegTrial,
+  endEegTrial,
+  finalizeEegTrial,
   getEegStatus,
   listEegSessions,
+  loadEegStudyVideoLibrary,
+  markEegTrialPhase,
   startEegRecording,
   stopEegStream,
   stopEegRecording,
@@ -151,13 +156,60 @@ describe('eegApi recording commands', () => {
     });
   });
 
+  it('starts and completes a current-paper trial with auditable metadata', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const studySession = {
+      studyStage: 'current_paper' as const,
+      paradigmSession: 'held_out_generation' as const,
+      subjectId: 'sub-001',
+      sessionRunId: 'sub-001-session-b',
+      feedbackEnabled: false as const,
+    };
+    const trial = {
+      trialId: 'trial-001',
+      paradigmEmotion: 'anxiety' as const,
+      systemEmotion: 'fear' as const,
+      triggerClass: 2 as const,
+      videoId: 'anxiety-01',
+      videoPath: 'database/Anxiety/anxiety-01.mp4',
+    };
+    const outcome = {
+      trialId: 'trial-001',
+      selfReportValence: 3,
+      selfReportArousal: 7,
+      selfReportDominance: 4,
+      selfReportAcceptance: 'accepted' as const,
+      labelSource: 'self_report_confirmed' as const,
+      artifactFlags: [],
+      operatorNotes: 'clean trial',
+    };
+
+    await startEegRecording({ userId: 'user-1', username: 'alice', studySession });
+    await beginEegTrial(trial);
+    await markEegTrialPhase({ trialId: 'trial-001', phase: 'pre_video_hint' });
+    await markEegTrialPhase({ trialId: 'trial-001', phase: 'video' });
+    await markEegTrialPhase({ trialId: 'trial-001', phase: 'post_video_rest' });
+    await endEegTrial({ trialId: 'trial-001' });
+    await finalizeEegTrial(outcome);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'start_eeg_recording', {
+      input: { userId: 'user-1', username: 'alice', studySession },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'begin_eeg_trial', { input: trial });
+    expect(invoke).toHaveBeenNthCalledWith(6, 'end_eeg_trial', {
+      input: { trialId: 'trial-001' },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(7, 'finalize_eeg_trial', { input: outcome });
+  });
+
   it('wraps recording status and session list commands', async () => {
+    const stoppedSession = { id: 'session-1' };
     vi.mocked(invoke)
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(stoppedSession)
       .mockResolvedValueOnce({ isRecording: false })
       .mockResolvedValueOnce([]);
 
-    await stopEegRecording();
+    await expect(stopEegRecording()).resolves.toBe(stoppedSession);
     await getEegStatus();
     await listEegSessions('user-1');
     await stopEegStream();
@@ -166,5 +218,15 @@ describe('eegApi recording commands', () => {
     expect(invoke).toHaveBeenNthCalledWith(2, 'get_eeg_status');
     expect(invoke).toHaveBeenNthCalledWith(3, 'list_eeg_sessions', { userId: 'user-1' });
     expect(invoke).toHaveBeenNthCalledWith(4, 'stop_eeg_stream');
+  });
+
+  it('loads a validated four-class study video library', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ assets: [], root: 'D:\\study' });
+
+    await loadEegStudyVideoLibrary('D:\\study');
+
+    expect(invoke).toHaveBeenCalledWith('load_eeg_study_video_library', {
+      folderPath: 'D:\\study',
+    });
   });
 });

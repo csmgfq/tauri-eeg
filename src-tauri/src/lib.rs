@@ -12,17 +12,18 @@ mod video_library;
 
 use auth::UserProfile;
 use db::AppDb;
-use eeg::{
-    EegRecordingSession, EegStatus, EegStreamConfig, EegStreamInfo, EegStreamState,
-    StartEegRecordingInput,
+use eeg::commands::{
+    begin_eeg_trial, end_eeg_trial, finalize_eeg_trial, get_eeg_status, list_eeg_sessions,
+    load_eeg_study_video_library, mark_eeg_trial_phase, start_eeg_recording, start_eeg_stream,
+    stop_eeg_recording, stop_eeg_stream,
 };
+use eeg::EegStreamState;
 use music_history::MusicHistoryItem;
 use neuro_music_client::{
     EegEmotionPredictRequest, EegEmotionResponse, NeuroEmotionControlRequest, NeuroMusicClient,
     NeuroMusicHealthResponse, NeuroMusicSessionStatus, StartNeuroMusicSessionRequest,
 };
 use neuro_music_service::NeuroMusicServiceManager;
-use python_client::{GenerateRequest, HealthResponse, PythonClient};
 use python_client::{
     AgentPlannerRequest, AgentPlannerResponse, GenerateRequest, HealthResponse, PythonClient,
 };
@@ -79,71 +80,6 @@ fn reset_user_password(
         &new_password,
         &expected_reset_code,
     )
-}
-
-#[tauri::command]
-fn start_eeg_stream(
-    app: tauri::AppHandle,
-    state: State<'_, EegStreamState>,
-    config: Option<EegStreamConfig>,
-) -> Result<EegStreamInfo, String> {
-    eeg::start_stream(app, &state, config)
-}
-
-#[tauri::command]
-fn stop_eeg_stream(db: State<'_, AppDb>, state: State<'_, EegStreamState>) -> Result<(), String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|_| "Database is unavailable.".to_string())?;
-
-    eeg::stop_stream(&state, &conn)
-}
-
-#[tauri::command]
-fn get_eeg_status(state: State<'_, EegStreamState>) -> Result<EegStatus, String> {
-    eeg::get_status(&state)
-}
-
-#[tauri::command]
-fn start_eeg_recording(
-    app: tauri::AppHandle,
-    db: State<'_, AppDb>,
-    state: State<'_, EegStreamState>,
-    input: StartEegRecordingInput,
-) -> Result<EegRecordingSession, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|_| "Database is unavailable.".to_string())?;
-
-    eeg::start_recording(&app, &conn, &state, input)
-}
-
-#[tauri::command]
-fn stop_eeg_recording(
-    db: State<'_, AppDb>,
-    state: State<'_, EegStreamState>,
-) -> Result<EegRecordingSession, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|_| "Database is unavailable.".to_string())?;
-
-    eeg::stop_recording(&conn, &state)
-}
-
-#[tauri::command]
-fn list_eeg_sessions(
-    db: State<'_, AppDb>,
-    user_id: String,
-) -> Result<Vec<EegRecordingSession>, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|_| "Database is unavailable.".to_string())?;
-
-    eeg::list_sessions(&conn, &user_id)
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,6 +290,10 @@ async fn send_neuro_music_emotion_control(
             arousal: input.arousal,
             playback_pos: input.playback_pos.unwrap_or(0.0),
         })
+        .await
+}
+
+#[tauri::command]
 async fn plan_agent_action(
     service: State<'_, PythonServiceManager>,
     request: AgentPlannerRequest,
@@ -470,6 +410,11 @@ pub fn run() {
             start_eeg_recording,
             stop_eeg_recording,
             list_eeg_sessions,
+            begin_eeg_trial,
+            mark_eeg_trial_phase,
+            end_eeg_trial,
+            finalize_eeg_trial,
+            load_eeg_study_video_library,
             generate_music,
             get_music_service_health,
             get_neuro_music_health,

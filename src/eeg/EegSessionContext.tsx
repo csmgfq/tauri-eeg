@@ -39,10 +39,13 @@ import {
 import type {
   EegDisplaySettings,
   EegDisplaySnapshot,
+  EegRecordingSession,
+  EegStudySessionInput,
   EegStreamInfo,
 } from './types';
 
 type EegSessionContextValue = {
+  activeStudySession: EegStudySessionInput | null;
   bufferRef: MutableRefObject<EegRingBuffer>;
   canPauseRecord: boolean;
   canResumeRecord: boolean;
@@ -58,13 +61,14 @@ type EegSessionContextValue = {
   resetBuffer: () => void;
   resumeRecord: () => void;
   sampleRateHz: number;
+  triggerConnected: boolean;
   settings: EegDisplaySettings;
   setAmplitudeUvPerDiv: (amplitudeUvPerDiv: number) => void;
   setTimeWindowSeconds: (timeWindowSeconds: number) => void;
   startDevice: () => Promise<void>;
-  startRecord: () => Promise<void>;
+  startRecord: (studySession?: EegStudySessionInput) => Promise<boolean>;
   stopDevice: () => Promise<void>;
-  stopRecord: () => Promise<void>;
+  stopRecord: () => Promise<EegRecordingSession | null>;
   takeSnapshot: () => EegDisplaySnapshot;
   toggleChannel: (channelId: string) => void;
 };
@@ -77,6 +81,8 @@ export function EegProvider({ children }: { children: ReactNode }) {
   const bufferRef = useRef(new EegRingBuffer(channels, DEFAULT_SAMPLE_RATE_HZ));
 
   const [streamInfo, setStreamInfo] = useState<EegStreamInfo | null>(null);
+  const [activeStudySession, setActiveStudySession] = useState<EegStudySessionInput | null>(null);
+  const [triggerConnected, setTriggerConnected] = useState(false);
   const [sessionState, dispatchSession] = useReducer(eegSessionReducer, initialEegSessionState);
   const [settings, setSettings] = useState<EegDisplaySettings>(createInitialEegDisplaySettings);
 
@@ -119,6 +125,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
       const info = await startEegStream();
       setStreamInfo(info);
       const status = await getEegStatus();
+      setTriggerConnected(status.triggerConnected);
       if (status.eegConnected) {
         dispatchSession({ type: 'start_device_succeeded' });
       }
@@ -143,6 +150,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
             return;
           }
           if (status.eegConnected) {
+            setTriggerConnected(status.triggerConnected);
             dispatchSession({ type: 'start_device_succeeded' });
           }
         })
@@ -157,8 +165,32 @@ export function EegProvider({ children }: { children: ReactNode }) {
     };
   }, [sessionState.deviceStatus]);
 
+  useEffect(() => {
+    if (sessionState.deviceStatus !== 'streaming') {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshConnections = () => {
+      getEegStatus()
+        .then((status) => {
+          if (!cancelled) {
+            setTriggerConnected(status.triggerConnected);
+          }
+        })
+        .catch(() => undefined);
+    };
+    const interval = window.setInterval(refreshConnections, 1000);
+    refreshConnections();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [sessionState.deviceStatus]);
+
   const stopDevice = useCallback(async () => {
-    if (!canStopDevice(sessionState)) {
+    if (activeStudySession || !canStopDevice(sessionState)) {
       return;
     }
 
@@ -167,6 +199,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
     try {
       await stopEegStream();
       setStreamInfo(null);
+      setTriggerConnected(false);
       bufferRef.current.reset();
       dispatchSession({ type: 'stop_device_succeeded' });
     } catch (error) {
@@ -175,11 +208,11 @@ export function EegProvider({ children }: { children: ReactNode }) {
         message: typeof error === 'string' ? error : 'Failed to stop EEG stream.',
       });
     }
-  }, [sessionState]);
+  }, [activeStudySession, sessionState]);
 
-  const startRecord = useCallback(async () => {
+  const startRecord = useCallback(async (studySession?: EegStudySessionInput) => {
     if (!canStartRecord(sessionState)) {
-      return;
+      return false;
     }
 
     if (!currentUser) {
@@ -187,44 +220,55 @@ export function EegProvider({ children }: { children: ReactNode }) {
         type: 'start_record_failed',
         message: 'Sign in before recording EEG.',
       });
-      return;
+      return false;
     }
 
     try {
       await startEegRecording({
         userId: currentUser.id,
         username: currentUser.username,
+        studySession,
       });
+      setActiveStudySession(studySession ?? null);
       dispatchSession({ type: 'start_record' });
+      return true;
     } catch (error) {
       dispatchSession({
         type: 'start_record_failed',
         message: typeof error === 'string' ? error : 'Failed to start EEG recording.',
       });
+      return false;
     }
   }, [currentUser, sessionState]);
 
   const pauseRecord = useCallback(() => {
-    if (canPauseRecord(sessionState)) {
+    if (!activeStudySession && canPauseRecord(sessionState)) {
       dispatchSession({ type: 'pause_record' });
     }
-  }, [sessionState]);
+  }, [activeStudySession, sessionState]);
 
   const resumeRecord = useCallback(() => {
-    if (canResumeRecord(sessionState)) {
+    if (!activeStudySession && canResumeRecord(sessionState)) {
       dispatchSession({ type: 'resume_record' });
     }
-  }, [sessionState]);
+  }, [activeStudySession, sessionState]);
 
   const stopRecord = useCallback(async () => {
     if (!canStopRecord(sessionState)) {
-      return;
+      return null;
     }
 
     try {
-      await stopEegRecording();
-    } finally {
+      const session = await stopEegRecording();
+      setActiveStudySession(null);
       dispatchSession({ type: 'stop_record' });
+      return session;
+    } catch (error) {
+      dispatchSession({
+        type: 'record_command_failed',
+        message: typeof error === 'string' ? error : 'Failed to stop EEG recording.',
+      });
+      return null;
     }
   }, [sessionState]);
 
@@ -256,12 +300,13 @@ export function EegProvider({ children }: { children: ReactNode }) {
   ), [settings.timeWindowSeconds, settings.visibleChannelIds]);
 
   const value = useMemo<EegSessionContextValue>(() => ({
+    activeStudySession,
     bufferRef,
-    canPauseRecord: canPauseRecord(sessionState),
-    canResumeRecord: canResumeRecord(sessionState),
+    canPauseRecord: !activeStudySession && canPauseRecord(sessionState),
+    canResumeRecord: !activeStudySession && canResumeRecord(sessionState),
     canStartDevice: canStartDevice(sessionState),
     canStartRecord: canStartRecord(sessionState),
-    canStopDevice: canStopDevice(sessionState),
+    canStopDevice: !activeStudySession && canStopDevice(sessionState),
     canStopRecord: canStopRecord(sessionState),
     channels,
     deviceStatus: sessionState.deviceStatus,
@@ -271,6 +316,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
     resetBuffer,
     resumeRecord,
     sampleRateHz: streamInfo?.sampleRateHz ?? DEFAULT_SAMPLE_RATE_HZ,
+    triggerConnected,
     settings,
     setAmplitudeUvPerDiv,
     setTimeWindowSeconds,
@@ -281,6 +327,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
     takeSnapshot,
     toggleChannel,
   }), [
+    activeStudySession,
     channels,
     pauseRecord,
     resetBuffer,
@@ -296,6 +343,7 @@ export function EegProvider({ children }: { children: ReactNode }) {
     streamInfo?.sampleRateHz,
     takeSnapshot,
     toggleChannel,
+    triggerConnected,
   ]);
 
   return (

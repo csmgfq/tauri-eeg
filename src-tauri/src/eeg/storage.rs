@@ -10,13 +10,19 @@ use std::{
 use super::{
     buffer::default_channel_ids,
     protocol::EEG_CHANNEL_COUNT,
-    session::{EegRecordingSession, StartEegRecordingInput},
+    session::{EegRecordingDeviceMetadata, EegRecordingSession, StartEegRecordingInput},
+    trial::{
+        BeginEegTrialInput, EegStudySessionInput, EegTrialEvent, EegTrialRecord, EegTrialState,
+        EndEegTrialInput, FinalizeEegTrialInput, MarkEegTrialPhaseInput,
+    },
     EegStreamConfig,
 };
 
 const EEG_FILE_NAME: &str = "eeg.f32le.bin";
 const TRIGGER_FILE_NAME: &str = "trigger.i32le.bin";
 const METADATA_FILE_NAME: &str = "metadata.json";
+const TRIAL_EVENTS_FILE_NAME: &str = "trial-events.jsonl";
+const TRIALS_FILE_NAME: &str = "trials.jsonl";
 const DISPLAY_CHANNEL_LIMIT: usize = 16;
 
 #[derive(Debug, Serialize)]
@@ -39,6 +45,12 @@ struct RecordingMetadata {
     started_at: String,
     ended_at: String,
     duration_seconds: f64,
+    device_metadata: EegRecordingDeviceMetadata,
+    study_session: Option<EegStudySessionInput>,
+    trial_events_file: Option<String>,
+    trials_file: Option<String>,
+    completed_trial_count: u32,
+    interrupted_trial_count: u32,
 }
 
 #[derive(Debug)]
@@ -47,6 +59,10 @@ pub struct RecordingWriter {
     eeg_writer: BufWriter<File>,
     trigger_writer: BufWriter<File>,
     started_at: DateTime<Utc>,
+    device_metadata: EegRecordingDeviceMetadata,
+    trial_state: Option<EegTrialState>,
+    trial_events_writer: Option<BufWriter<File>>,
+    trials_writer: Option<BufWriter<File>>,
 }
 
 impl RecordingWriter {
@@ -56,7 +72,12 @@ impl RecordingWriter {
         input: StartEegRecordingInput,
         config: &EegStreamConfig,
     ) -> Result<Self, String> {
-        let user_id = validate_user(conn, input)?;
+        let trial_state = input
+            .study_session
+            .clone()
+            .map(EegTrialState::new)
+            .transpose()?;
+        let user_id = validate_user(conn, &input)?;
         let started_at = Utc::now();
         let session_id = started_at.format("session_%Y%m%d_%H%M%S").to_string();
         let roots = crate::storage_paths::user_storage_roots(base_dir, &user_id.username)?;
@@ -73,6 +94,15 @@ impl RecordingWriter {
             File::create(&trigger_path)
                 .map_err(|_| "Failed to create trigger binary file.".to_string())?,
         );
+        let (trial_events_writer, trials_writer) = if trial_state.is_some() {
+            let events = File::create(session_dir.join(TRIAL_EVENTS_FILE_NAME))
+                .map_err(|_| "Failed to create EEG trial events file.".to_string())?;
+            let trials = File::create(session_dir.join(TRIALS_FILE_NAME))
+                .map_err(|_| "Failed to create EEG trials file.".to_string())?;
+            (Some(BufWriter::new(events)), Some(BufWriter::new(trials)))
+        } else {
+            (None, None)
+        };
 
         let session = EegRecordingSession {
             id: session_dir
@@ -99,6 +129,16 @@ impl RecordingWriter {
             eeg_writer,
             trigger_writer,
             started_at,
+            device_metadata: EegRecordingDeviceMetadata {
+                bind_host: config.bind_host.clone(),
+                tcp_port: config.tcp_port,
+                eeg_device_ip: config.eeg_device_ip.clone(),
+                trigger_device_ip: config.trigger_device_ip.clone(),
+                block_interval_ms: config.block_interval_ms,
+            },
+            trial_state,
+            trial_events_writer,
+            trials_writer,
         })
     }
 
@@ -111,6 +151,9 @@ impl RecordingWriter {
         samples_uv: &[f32; EEG_CHANNEL_COUNT],
         trigger: i32,
     ) -> Result<(), String> {
+        if let Some(state) = self.trial_state.as_mut() {
+            state.observe_trigger(trigger, self.session.sample_count);
+        }
         for sample in samples_uv {
             self.eeg_writer
                 .write_all(&sample.to_le_bytes())
@@ -123,15 +166,76 @@ impl RecordingWriter {
         Ok(())
     }
 
+    pub fn begin_trial(&mut self, input: BeginEegTrialInput) -> Result<EegTrialEvent, String> {
+        let sample_index = self.session.sample_count;
+        let recorded_at = Utc::now().to_rfc3339();
+        let event = self
+            .trial_state_mut()?
+            .begin(input, sample_index, recorded_at)?;
+        write_json_line(self.trial_events_writer_mut()?, &event)?;
+        Ok(event)
+    }
+
+    pub fn mark_trial_phase(
+        &mut self,
+        input: MarkEegTrialPhaseInput,
+    ) -> Result<EegTrialEvent, String> {
+        let sample_index = self.session.sample_count;
+        let recorded_at = Utc::now().to_rfc3339();
+        let event = self
+            .trial_state_mut()?
+            .mark_phase(input, sample_index, recorded_at)?;
+        write_json_line(self.trial_events_writer_mut()?, &event)?;
+        Ok(event)
+    }
+
+    pub fn end_trial(&mut self, input: EndEegTrialInput) -> Result<EegTrialEvent, String> {
+        let sample_index = self.session.sample_count;
+        let recorded_at = Utc::now().to_rfc3339();
+        let event = self
+            .trial_state_mut()?
+            .end(input, sample_index, recorded_at)?;
+        write_json_line(self.trial_events_writer_mut()?, &event)?;
+        Ok(event)
+    }
+
+    pub fn finalize_trial(
+        &mut self,
+        input: FinalizeEegTrialInput,
+    ) -> Result<EegTrialRecord, String> {
+        let record = self.trial_state_mut()?.finalize(input)?;
+        write_json_line(self.trials_writer_mut()?, &record)?;
+        Ok(record)
+    }
+
     pub fn finish(mut self, conn: &Connection) -> Result<EegRecordingSession, String> {
+        let ended_at = Utc::now();
+        let interrupted = self.trial_state.as_mut().and_then(|state| {
+            state.interrupt(
+                self.session.sample_count,
+                ended_at.to_rfc3339(),
+                "recording_stopped_before_trial_finalize",
+            )
+        });
+        if let Some(record) = interrupted {
+            write_json_line(self.trials_writer_mut()?, &record)?;
+        }
         self.eeg_writer
             .flush()
             .map_err(|_| "Failed to flush EEG binary file.".to_string())?;
         self.trigger_writer
             .flush()
             .map_err(|_| "Failed to flush trigger binary file.".to_string())?;
-
-        let ended_at = Utc::now();
+        if let Some(writer) = self.trial_events_writer.as_mut() {
+            writer
+                .flush()
+                .map_err(|_| "Failed to flush EEG trial events file.".to_string())?;
+        }
+        if let Some(writer) = self.trials_writer.as_mut() {
+            writer
+                .flush()
+                .map_err(|_| "Failed to flush EEG trials file.".to_string())?;
+        }
         let duration_seconds = (ended_at - self.started_at)
             .to_std()
             .map(|duration| duration.as_secs_f64())
@@ -139,10 +243,57 @@ impl RecordingWriter {
         self.session.ended_at = Some(ended_at.to_rfc3339());
         self.session.duration_seconds = Some(duration_seconds);
 
-        write_metadata(&self.session, duration_seconds)?;
+        let (study_session, completed_count, interrupted_count) = self
+            .trial_state
+            .as_ref()
+            .map(|state| {
+                (
+                    Some(state.study().clone()),
+                    state.completed_count(),
+                    state.interrupted_count(),
+                )
+            })
+            .unwrap_or((None, 0, 0));
+        write_metadata(
+            &self.session,
+            duration_seconds,
+            self.device_metadata,
+            study_session,
+            completed_count,
+            interrupted_count,
+        )?;
         insert_eeg_session(conn, &self.session)?;
         Ok(self.session)
     }
+
+    fn trial_state_mut(&mut self) -> Result<&mut EegTrialState, String> {
+        self.trial_state
+            .as_mut()
+            .ok_or_else(|| "The active EEG recording has no study session context.".to_string())
+    }
+
+    fn trial_events_writer_mut(&mut self) -> Result<&mut BufWriter<File>, String> {
+        self.trial_events_writer
+            .as_mut()
+            .ok_or_else(|| "EEG trial events writer is unavailable.".to_string())
+    }
+
+    fn trials_writer_mut(&mut self) -> Result<&mut BufWriter<File>, String> {
+        self.trials_writer
+            .as_mut()
+            .ok_or_else(|| "EEG trials writer is unavailable.".to_string())
+    }
+}
+
+fn write_json_line<T: Serialize>(writer: &mut BufWriter<File>, value: &T) -> Result<(), String> {
+    serde_json::to_writer(&mut *writer, value)
+        .map_err(|_| "Failed to serialize EEG trial data.".to_string())?;
+    writer
+        .write_all(b"\n")
+        .map_err(|_| "Failed to write EEG trial data.".to_string())?;
+    writer
+        .flush()
+        .map_err(|_| "Failed to flush EEG trial data.".to_string())
 }
 
 #[derive(Debug)]
@@ -220,7 +371,7 @@ pub fn list_eeg_sessions(
         .map_err(|_| "Failed to load EEG sessions.".to_string())
 }
 
-fn validate_user(conn: &Connection, input: StartEegRecordingInput) -> Result<ValidUser, String> {
+fn validate_user(conn: &Connection, input: &StartEegRecordingInput) -> Result<ValidUser, String> {
     let user_id = input.user_id.trim();
     let username = input.username.trim();
     if user_id.is_empty() {
@@ -263,13 +414,20 @@ fn unique_session_dir(user_base_dir: &Path, session_id: &str) -> Result<PathBuf,
     Err("Failed to allocate EEG session directory.".to_string())
 }
 
-fn write_metadata(session: &EegRecordingSession, duration_seconds: f64) -> Result<(), String> {
+fn write_metadata(
+    session: &EegRecordingSession,
+    duration_seconds: f64,
+    device_metadata: EegRecordingDeviceMetadata,
+    study_session: Option<EegStudySessionInput>,
+    completed_trial_count: u32,
+    interrupted_trial_count: u32,
+) -> Result<(), String> {
     let ended_at = session
         .ended_at
         .clone()
         .ok_or_else(|| "EEG session end time is unavailable.".to_string())?;
     let metadata = RecordingMetadata {
-        format_version: 1,
+        format_version: 3,
         session_id: session.id.clone(),
         user_id: session.user_id.clone(),
         username: session.username.clone(),
@@ -286,6 +444,14 @@ fn write_metadata(session: &EegRecordingSession, duration_seconds: f64) -> Resul
         started_at: session.started_at.clone(),
         ended_at,
         duration_seconds,
+        device_metadata,
+        trial_events_file: study_session
+            .as_ref()
+            .map(|_| TRIAL_EVENTS_FILE_NAME.to_string()),
+        trials_file: study_session.as_ref().map(|_| TRIALS_FILE_NAME.to_string()),
+        study_session,
+        completed_trial_count,
+        interrupted_trial_count,
     };
 
     let metadata_path = Path::new(&session.session_dir).join(METADATA_FILE_NAME);
@@ -323,127 +489,5 @@ fn insert_eeg_session(conn: &Connection, session: &EegRecordingSession) -> Resul
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn setup_conn() -> Connection {
-        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
-        conn.execute(
-            "CREATE TABLE users (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-            [],
-        )
-        .expect("create users table");
-        conn.execute(
-            "INSERT INTO users (id, username, password_hash, created_at, updated_at)
-                VALUES ('user-1', 'alice', 'hash', 'now', 'now')",
-            [],
-        )
-        .expect("insert user");
-        init_eeg_session_schema(&conn).expect("init eeg schema");
-        conn
-    }
-
-    fn temp_recording_dir() -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        std::env::temp_dir().join(format!("tauri-eeg-storage-test-{suffix}"))
-    }
-
-    #[test]
-    fn creates_eeg_sessions_schema() {
-        let conn = setup_conn();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'eeg_sessions'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query schema");
-
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn rejects_recording_for_missing_user() {
-        let conn = setup_conn();
-        let base_dir = temp_recording_dir();
-
-        let result = RecordingWriter::start(
-            &conn,
-            &base_dir,
-            StartEegRecordingInput {
-                user_id: "missing".to_string(),
-                username: "alice".to_string(),
-            },
-            &EegStreamConfig::default(),
-        );
-
-        assert_eq!(result.unwrap_err(), "User not found.");
-    }
-
-    #[test]
-    fn writes_sample_major_binaries_metadata_and_user_bound_row() {
-        let conn = setup_conn();
-        let base_dir = temp_recording_dir();
-        let mut writer = RecordingWriter::start(
-            &conn,
-            &base_dir,
-            StartEegRecordingInput {
-                user_id: "user-1".to_string(),
-                username: "alice".to_string(),
-            },
-            &EegStreamConfig::default(),
-        )
-        .expect("start writer");
-
-        let mut sample = [0.0_f32; EEG_CHANNEL_COUNT];
-        sample[0] = 1.25;
-        sample[31] = -2.5;
-        writer.write_sample(&sample, 3).expect("write sample");
-        let session = writer.finish(&conn).expect("finish writer");
-
-        let eeg_bytes =
-            fs::read(Path::new(&session.session_dir).join(EEG_FILE_NAME)).expect("read eeg binary");
-        let trigger_bytes = fs::read(Path::new(&session.session_dir).join(TRIGGER_FILE_NAME))
-            .expect("read trigger binary");
-        let metadata_text =
-            fs::read_to_string(Path::new(&session.session_dir).join(METADATA_FILE_NAME))
-                .expect("read metadata");
-        let metadata: serde_json::Value =
-            serde_json::from_str(&metadata_text).expect("parse metadata");
-        let sessions = list_eeg_sessions(&conn, "user-1").expect("list sessions");
-
-        assert_eq!(
-            eeg_bytes.len(),
-            EEG_CHANNEL_COUNT * std::mem::size_of::<f32>()
-        );
-        assert_eq!(&eeg_bytes[0..4], &1.25_f32.to_le_bytes());
-        assert_eq!(&eeg_bytes[(31 * 4)..(32 * 4)], &(-2.5_f32).to_le_bytes());
-        assert_eq!(trigger_bytes, 3_i32.to_le_bytes());
-        assert_eq!(metadata["formatVersion"], 1);
-        assert_eq!(metadata["userId"], "user-1");
-        assert_eq!(metadata["channelCount"], 32);
-        assert_eq!(metadata["eegDtype"], "float32_le");
-        assert_eq!(metadata["eegLayout"], "sample_major");
-        assert_eq!(metadata["sampleCount"], 1);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].user_id, "user-1");
-        assert_eq!(sessions[0].sample_count, 1);
-        assert!(Path::new(&session.session_dir).ends_with(
-            Path::new("alice")
-                .join("eeg_recordings")
-                .join(&session.id)
-        ));
-
-        let _ = fs::remove_dir_all(base_dir);
-    }
-}
+#[path = "storage_tests.rs"]
+mod tests;

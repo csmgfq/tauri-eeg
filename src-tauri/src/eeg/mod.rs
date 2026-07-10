@@ -1,8 +1,11 @@
 pub mod buffer;
+pub mod commands;
 pub mod protocol;
 pub mod server;
 pub mod session;
 pub mod storage;
+pub mod study_video;
+pub mod trial;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -20,6 +23,11 @@ const DEFAULT_TRIGGER_DEVICE_IP: &str = "192.168.1.103";
 
 pub use session::{EegRecordingSession, EegStatus, StartEegRecordingInput};
 use storage::RecordingWriter;
+pub use study_video::{load_eeg_study_video_library, EegStudyVideoLibrary};
+pub use trial::{
+    BeginEegTrialInput, EegTrialEvent, EegTrialRecord, EndEegTrialInput, FinalizeEegTrialInput,
+    MarkEegTrialPhaseInput,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +196,7 @@ pub fn start_recording(
     state: &EegStreamState,
     input: StartEegRecordingInput,
 ) -> Result<EegRecordingSession, String> {
+    let requires_trigger = input.study_session.is_some();
     let config = {
         let runtime = state
             .inner
@@ -197,6 +206,8 @@ pub fn start_recording(
             runtime.worker.is_some(),
             runtime.eeg_connected,
             runtime.recording.is_some(),
+            runtime.trigger_connected,
+            requires_trigger,
         )?;
         runtime.config.clone().unwrap_or_default()
     };
@@ -235,6 +246,46 @@ pub fn stop_recording(
     Ok(session)
 }
 
+pub fn begin_trial(
+    state: &EegStreamState,
+    input: BeginEegTrialInput,
+) -> Result<EegTrialEvent, String> {
+    with_recording_mut(state, |writer| writer.begin_trial(input))
+}
+
+pub fn mark_trial_phase(
+    state: &EegStreamState,
+    input: MarkEegTrialPhaseInput,
+) -> Result<EegTrialEvent, String> {
+    with_recording_mut(state, |writer| writer.mark_trial_phase(input))
+}
+
+pub fn end_trial(state: &EegStreamState, input: EndEegTrialInput) -> Result<EegTrialEvent, String> {
+    with_recording_mut(state, |writer| writer.end_trial(input))
+}
+
+pub fn finalize_trial(
+    state: &EegStreamState,
+    input: FinalizeEegTrialInput,
+) -> Result<EegTrialRecord, String> {
+    with_recording_mut(state, |writer| writer.finalize_trial(input))
+}
+
+fn with_recording_mut<T>(
+    state: &EegStreamState,
+    action: impl FnOnce(&mut RecordingWriter) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut runtime = state
+        .inner
+        .lock()
+        .map_err(|_| "EEG stream state is unavailable.".to_string())?;
+    let writer = runtime
+        .recording
+        .as_mut()
+        .ok_or_else(|| "No EEG recording is active.".to_string())?;
+    action(writer)
+}
+
 pub fn list_sessions(conn: &Connection, user_id: &str) -> Result<Vec<EegRecordingSession>, String> {
     storage::list_eeg_sessions(conn, user_id)
 }
@@ -243,6 +294,8 @@ fn validate_recording_ready(
     is_streaming: bool,
     eeg_connected: bool,
     is_recording: bool,
+    trigger_connected: bool,
+    requires_trigger: bool,
 ) -> Result<(), String> {
     if !is_streaming {
         return Err("Start EEG stream before recording.".to_string());
@@ -252,6 +305,9 @@ fn validate_recording_ready(
     }
     if is_recording {
         return Err("EEG recording is already active.".to_string());
+    }
+    if requires_trigger && !trigger_connected {
+        return Err("Wait for the trigger stream before starting a study session.".to_string());
     }
     Ok(())
 }
@@ -263,17 +319,28 @@ mod tests {
     #[test]
     fn recording_requires_valid_eeg_data_after_stream_start() {
         assert_eq!(
-            validate_recording_ready(false, false, false),
+            validate_recording_ready(false, false, false, false, false),
             Err("Start EEG stream before recording.".to_string())
         );
         assert_eq!(
-            validate_recording_ready(true, false, false),
+            validate_recording_ready(true, false, false, false, false),
             Err("Wait for valid EEG data before recording.".to_string())
         );
         assert_eq!(
-            validate_recording_ready(true, true, true),
+            validate_recording_ready(true, true, true, true, true),
             Err("EEG recording is already active.".to_string())
         );
-        assert_eq!(validate_recording_ready(true, true, false), Ok(()));
+        assert_eq!(
+            validate_recording_ready(true, true, false, false, true),
+            Err("Wait for the trigger stream before starting a study session.".to_string())
+        );
+        assert_eq!(
+            validate_recording_ready(true, true, false, true, true),
+            Ok(())
+        );
+        assert_eq!(
+            validate_recording_ready(true, true, false, false, false),
+            Ok(())
+        );
     }
 }
